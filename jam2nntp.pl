@@ -254,8 +254,31 @@ sub common_article {
   $article = 1 unless $article;
 
   if ( $article =~ /^<.*>$/ ) {
-        $kernel->post( $sender, 'send_to_client', $client_id, '430 no such article found' );
-        return;
+		my $num;
+		my $size;
+		$article =~ s/.*\+(.*)@.*/$1/;
+		$article =~ s/=/@/;
+		$article =~ s/\?/</;
+		$article =~ s/\?/>/;
+		$article =~ s/(.*)\./$1 /;
+		my $search;
+		
+		FTN::JAM::GetMBSize($handle,\$size) or die;
+		for( $num=1; $num <= $size; $num++) {
+			my(%header,@subfields,$text);
+            FTN::JAM::ReadMessage($handle, $num,\%header,\@subfields,\$text) or next;
+            my %fields = @subfields;
+            if( $fields{4} eq $article ) {
+				$search = $num;
+				last;
+			}
+		}
+		if( $search ) {
+			$article = $search;
+		} else {
+			$kernel->post( $sender, 'send_to_client', $client_id, '430 no such article found' );
+			return;
+		}
   }
   
   my(%header,@subfields,$text);
