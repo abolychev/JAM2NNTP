@@ -18,7 +18,12 @@ use Encode;
 my %groups;
 my $Address;
 
-if ( open F, '/usr/local/etc/fido/config' ) {
+unless( $ARGV[0] ) {
+  print "Use jam2nntp.pl \"path_to_hpt_config\"\nDefault /usr/local/etc/fido/config\n";
+  $ARGV[0] = '/usr/local/etc/fido/config';
+}
+
+if ( open F, $ARGV[0] ) {
     while (<F>) {
         if (/^(?:Netmail|Echo|Bad|Local|Dupe)Area\s+(\S+)\s+(\S+)\s.*?-b\s+Jam/)
         {
@@ -142,13 +147,24 @@ sub nntpd_posting {
         push @subfields, $reply;
     }
 
-    #  push @subfields, 2000;
-    #  push @subfields, 'TZUTC: 0300';
-    print Dumper( \@subfields );
 
     my $headerref = {};
+    
+    my $datetime = DateTime::Format::Mail->parse_datetime( $head->get('Date') );
+    $datetime->set_time_zone('floating');
     $headerref->{DateProcessed} = $headerref->{DateReceived} =
-      $headerref->{DateWritten} = FTN::JAM::TimeToLocal(time);
+      $headerref->{DateWritten} = $datetime->epoch;
+    
+    if( $head->get('Date') =~ /([\+\-]\d{4})\s*$/ ) {
+	  my $tz = $1;
+	  $tz =~ s/\+//;
+      push @subfields, 2000;
+      push @subfields, 'TZUTC: ' . $tz;
+    }
+    
+    print Dumper( \@subfields );
+
+    
     $headerref->{Attributes} = FTN::JAM::Attr::LOCAL | FTN::JAM::Attr::TYPEECHO;
 
     my $org = $head->get('Organization');
