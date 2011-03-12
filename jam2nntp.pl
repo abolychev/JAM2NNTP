@@ -38,8 +38,9 @@ if ( open F, $ARGV[0] ) {
 
 my $nntpd = POE::Component::Server::NNTP->spawn(
     alias   => 'nntpd',
-    posting => 0,
+    posting => 1,
     port    => 10119,
+    extra_cmds => ['mode']
 );
 
 POE::Session->create(
@@ -58,6 +59,7 @@ POE::Session->create(
               nntpd_cmd_group
               nntpd_cmd_article
               nntpd_cmd_head
+              nntpd_cmd_mode
               nntpd_posting
               )
         ],
@@ -84,6 +86,16 @@ sub nntpd_connection {
 sub nntpd_disconnected {
     my ( $kernel, $heap, $client_id ) = @_[ KERNEL, HEAP, ARG0 ];
     delete $heap->{clients}->{$client_id};
+    return;
+}
+
+sub nntpd_cmd_mode {
+    my ( $kernel, $sender, $client_id, $arg ) = @_[ KERNEL, SENDER, ARG0, ARG1 ];
+    my $message = '502 Reading service permanently unavailable';
+    if( $arg eq 'READER' ) {
+      $message = '200 Posting allowed';  
+	}
+    $kernel->post( $sender, 'send_to_client', $client_id, $message );
     return;
 }
 
