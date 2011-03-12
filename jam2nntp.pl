@@ -10,8 +10,10 @@ use Data::Dumper;
 #use MIME::QuotedPrint;
 use MIME::Words qw(encode_mimeword);
 use FTN::Address;
-use DateTime;
-use DateTime::Format::Mail;
+use Date::Format;
+use Date::Parse;
+#use DateTime;
+#use DateTime::Format::Mail;
 use MIME::Parser;
 use Encode;
 
@@ -162,10 +164,8 @@ sub nntpd_posting {
 
     my $headerref = {};
     
-    my $datetime = DateTime::Format::Mail->parse_datetime( $head->get('Date') );
-    $datetime->set_time_zone('floating');
     $headerref->{DateProcessed} = $headerref->{DateReceived} =
-      $headerref->{DateWritten} = $datetime->epoch;
+      $headerref->{DateWritten} = FTN::JAM::TimeToLocal( str2time( $head->get('Date') ) );
     
     if( $head->get('Date') =~ /([\+\-]\d{4})\s*$/ ) {
 	  my $tz = $1;
@@ -418,10 +418,8 @@ sub message_header {
     else {
         $faddr = $fields{4};
     }
-    my $dt =
-      DateTime->from_epoch(
-        epoch => FTN::JAM::LocalToTime( $header->{DateWritten} ) );
-    my $date = DateTime::Format::Mail->format_datetime($dt);
+
+    my $date = time2str( "%a, %e %b %Y %X %z", FTN::JAM::LocalToTime( $header->{DateWritten } ) );
     my $head =
         "Newsgroups: $group\n"
       . "Path: localhost\n"
