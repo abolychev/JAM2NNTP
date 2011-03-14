@@ -18,6 +18,7 @@ use MIME::Parser;
 use Encode;
 
 my %groups;
+my %grtype;
 my $Address;
 
 unless( $ARGV[0] ) {
@@ -27,9 +28,10 @@ unless( $ARGV[0] ) {
 
 if ( open F, $ARGV[0] ) {
     while (<F>) {
-        if (/^(?:Netmail|Echo|Bad|Local|Dupe)Area\s+(\S+)\s+(\S+)\s.*?-b\s+Jam/)
+        if (/^(Netmail|Echo|Bad|Local|Dupe)Area\s+(\S+)\s+(\S+)\s.*?-b\s+Jam/)
         {
-            $groups{ lc( 'fido7.' . $1 ) } = $2;
+            $groups{ lc( 'fido7.' . $2 ) } = $3;
+            $grtype{ lc( 'fido7.' . $2 ) } = lc $1;
         }
         if (/^Address\s+([\d:\.\/]+)/) {
             $Address = $1;
@@ -118,10 +120,43 @@ sub nntpd_cmd_post {
 sub nntpd_posting {
     my ( $kernel, $sender, $client_id, $text ) =
       @_[ KERNEL, SENDER, ARG0, ARG2 ];
+
+
+	my ( $grouplist, $subfields, $nmsubfields, $headerref, $msg ) = rfc2ftn( $text );
+	
+	
+#WRITE
+	my $ok = 0;
+	foreach my $group ( split /\s*,\s*/, $grouplist ) {
+		my %hr = %$headerref;
+		my @sf = @$subfields;
+		if( $grtype{$group} eq 'netmail' ) {
+			$hr{Attributes} = FTN::JAM::Attr::LOCAL | FTN::JAM::Attr::TYPENET | FTN::JAM::Attr::PRIVATE;
+			@sf = ( @sf, @$nmsubfields );
+		} else {
+			$hr{Attributes} = FTN::JAM::Attr::LOCAL | FTN::JAM::Attr::TYPEECHO;
+		}
+		print Dumper( \@sf );
+		my $handle = FTN::JAM::OpenMB( $groups{$group} ) or die;
+		FTN::JAM::LockMB( $handle, 10 ) or die;
+		FTN::JAM::AddMessage( $handle, \%hr, \@sf, $msg ) or die;
+		FTN::JAM::UnlockMB($handle);
+		FTN::JAM::CloseMB($handle);
+		$ok = 1;
+	}
+
+    $kernel->post( $sender, 'send_to_client', $client_id,
+        $ok ? '240 article posted ok' : '441 posting failed' );
+    return;
+}
+
+sub rfc2ftn {
+	my $text = shift;
     my @subfields = ();
     print Dumper($text);
     my $parser = new MIME::Parser;
     $parser->decode_headers(1);
+    $parser->tmp_to_core(1);
 
     #  $parser->decode_bodies(1);
     my $entity = $parser->parse_data( join "\n", @$text );
@@ -133,9 +168,9 @@ sub nntpd_posting {
     chomp $from;
     $from =~ s/\s+<.*//;
     Encode::from_to( $from, $head->mime_attr('content-type.charset'), 'cp866' );
-    my $to = $head->get('X-Comment-To');
-    chomp $to;
-    Encode::from_to( $to, $head->mime_attr('content-type.charset'), 'cp866' );
+    my $xto = $head->get('X-Comment-To');
+    chomp $xto;
+    Encode::from_to( $xto, $head->mime_attr('content-type.charset'), 'cp866' );
 
     my $reply = $head->get('In-Reply-To');
     chomp $reply;
@@ -145,15 +180,13 @@ sub nntpd_posting {
     $reply =~ s/\?/>/;
     $reply =~ s/(.*)\./$1 /;
 
+
     push @subfields, 6;
     push @subfields, $subj;
 
-    #  push @subfields, 0;
-    #  push @subfields, $Address;
     push @subfields, 2;
     push @subfields, $from;
-    push @subfields, 3;
-    push @subfields, $to ? $to : 'All';
+
     push @subfields, 4;
     push @subfields, $Address . sprintf( " %08x", time );
     if ($reply) {
@@ -174,10 +207,41 @@ sub nntpd_posting {
       push @subfields, 'TZUTC: ' . $tz;
     }
     
-    print Dumper( \@subfields );
 
-    
-    $headerref->{Attributes} = FTN::JAM::Attr::LOCAL | FTN::JAM::Attr::TYPEECHO;
+#    $headerref->{Attributes} = FTN::JAM::Attr::LOCAL | FTN::JAM::Attr::TYPEECHO;
+
+    my $group = lc $head->get('Newsgroups');
+    chomp $group;
+
+
+#NETMAIL
+	my $to;
+	my @nmsubfields = ();
+
+	my $nto = $head->get('Reply-To');
+	chomp $nto;
+	if( $nto ) {
+		Encode::from_to( $nto, $head->mime_attr('content-type.charset'), 'cp866' );
+		if( $nto =~ /^\s*(.*?)\s*<.*?@(?:p(\d+)\.)?f(\d+)\.n(\d+)\.z(\d+)\.fidonet\.org>/) {
+		    push @nmsubfields, 1;
+			push @nmsubfields, $5 . ':' . $4 . '/' . $3 . ( $2 ? ('.' . $2) : '' );
+			$to = $1;
+		}
+	} else {
+		if( $reply =~ /(\d+:\d+\/\d+(\.\d+))/ ) {
+			push @nmsubfields, 1;
+			push @nmsubfields, $1;
+		}
+	}
+	push @nmsubfields, 0;
+	push @nmsubfields, $Address;
+
+	push @subfields, 3;
+	push @subfields, $xto ? $xto : ( $to ? $to : 'All' );    
+#	$headerref->{Attributes} = FTN::JAM::Attr::LOCAL | FTN::JAM::Attr::TYPENET | FTN::JAM::Attr::PRIVATE;
+
+
+#BODY
 
     my $org = $head->get('Organization');
     chomp $org;
@@ -190,19 +254,11 @@ sub nntpd_posting {
     $msg =~ s/\n/\r/g;
     $msg .= "\r--- jam2nntp.pl\r";
     $msg .= " * Origin: " . ( $org ? $org : 'No origin' ) . " ($Address)\r";
-
-    my $group = lc $head->get('Newsgroups');
-    chomp $group;
-    my $handle = FTN::JAM::OpenMB( $groups{$group} ) or die;
-    FTN::JAM::LockMB( $handle, 10 ) or die;
-    FTN::JAM::AddMessage( $handle, $headerref, \@subfields, \$msg ) or die;
-    FTN::JAM::UnlockMB($handle);
-    FTN::JAM::CloseMB($handle);
-
-    $kernel->post( $sender, 'send_to_client', $client_id,
-        '240 article posted ok' );
-    return;
+    
+    return ( $group, \@subfields, \@nmsubfields, $headerref, \$msg );
 }
+
+
 
 sub nntpd_cmd_ihave {
     my ( $kernel, $sender, $client_id ) = @_[ KERNEL, SENDER, ARG0 ];
@@ -413,7 +469,7 @@ sub message_header {
     my $faddr;
     my $addr;
     if ( $addr = new FTN::Address( $fields{4} ) ) {
-        $faddr = '<' . $addr->fqdn() . '>';
+        $faddr = '<' . $addr->fqdn('org') . '>';
     }
     else {
         $faddr = $fields{4};
