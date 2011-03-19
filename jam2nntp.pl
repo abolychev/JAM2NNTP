@@ -121,38 +121,7 @@ sub nntpd_posting {
     my ( $kernel, $sender, $client_id, $text ) =
       @_[ KERNEL, SENDER, ARG0, ARG2 ];
 
-
-	my ( $grouplist, $subfields, $nmsubfields, $headerref, $msg ) = rfc2ftn( $text );
-	
-	
-#WRITE
-	my $ok = 0;
-	foreach my $group ( split /\s*,\s*/, $grouplist ) {
-		my %hr = %$headerref;
-		my @sf = @$subfields;
-		if( $grtype{$group} eq 'netmail' ) {
-			$hr{Attributes} = FTN::JAM::Attr::LOCAL | FTN::JAM::Attr::TYPENET | FTN::JAM::Attr::PRIVATE;
-			@sf = ( @sf, @$nmsubfields );
-		} else {
-			$hr{Attributes} = FTN::JAM::Attr::LOCAL | FTN::JAM::Attr::TYPEECHO;
-		}
-		print Dumper( \@sf );
-		my $handle = FTN::JAM::OpenMB( $groups{$group} ) or die;
-		FTN::JAM::LockMB( $handle, 10 ) or die;
-		FTN::JAM::AddMessage( $handle, \%hr, \@sf, $msg ) or die;
-		FTN::JAM::UnlockMB($handle);
-		FTN::JAM::CloseMB($handle);
-		$ok = 1;
-	}
-
-    $kernel->post( $sender, 'send_to_client', $client_id,
-        $ok ? '240 article posted ok' : '441 posting failed' );
-    return;
-}
-
-sub rfc2ftn {
-	my $text = shift;
-    my @subfields = ();
+#MESSAGE
     print Dumper($text);
     my $parser = new MIME::Parser;
     $parser->decode_headers(1);
@@ -161,6 +130,67 @@ sub rfc2ftn {
     #  $parser->decode_bodies(1);
     my $entity = $parser->parse_data( join "\n", @$text );
     my $head   = $entity->head;
+
+	my $grouplist = lc $head->get('Newsgroups');
+	chomp $grouplist;
+	my $ok = 0;
+
+	if( $head->get('Control') ) {
+		my $command = $head->get('Control');
+		chomp $command;
+		if( $command =~ /^cancel\s+(.*)/ ) {
+			my $id = $1;
+			my $handle = FTN::JAM::OpenMB( $groups{$grouplist} ) or die;
+			my $num = searchid( $id, $handle );
+			
+			FTN::JAM::LockMB( $handle, 10 ) or die;
+			my( %header, @subfields, $text );
+			FTN::JAM::ReadMessage( $handle, $num, \%header,\@subfields,\$text ) or die;
+			$header{Attributes} |= FTN::JAM::Attr::DELETED;
+			FTN::JAM::ChangeMessage( $handle, $num, \%header ) or die;
+			FTN::JAM::UnlockMB($handle);
+			FTN::JAM::CloseMB($handle);
+			$ok = 1;
+		}
+		
+	} else {
+
+		my ( $subfields, $nmsubfields, $headerref, $msg ) = rfc2ftn( $head, $entity->bodyhandle );
+	
+	
+#WRITE
+
+
+		foreach my $group ( split /\s*,\s*/, $grouplist ) {
+			my %hr = %$headerref;
+			my @sf = @$subfields;
+			if( $grtype{$group} eq 'netmail' ) {
+				$hr{Attributes} = FTN::JAM::Attr::LOCAL | FTN::JAM::Attr::TYPENET | FTN::JAM::Attr::PRIVATE;
+				@sf = ( @sf, @$nmsubfields );
+			} else {
+				$hr{Attributes} = FTN::JAM::Attr::LOCAL | FTN::JAM::Attr::TYPEECHO;
+			}
+			print Dumper( \@sf );
+			my $handle = FTN::JAM::OpenMB( $groups{$group} ) or die;
+			FTN::JAM::LockMB( $handle, 10 ) or die;
+			FTN::JAM::AddMessage( $handle, \%hr, \@sf, $msg ) or die;
+			FTN::JAM::UnlockMB($handle);
+			FTN::JAM::CloseMB($handle);
+			$ok = 1;
+		}
+	}
+
+    $kernel->post( $sender, 'send_to_client', $client_id,
+        $ok ? '240 article posted ok' : '441 posting failed' );
+    return;
+}
+
+sub rfc2ftn {
+	my $head = shift;
+	my $bodyh = shift;
+    my @subfields = ();
+
+
     my $subj   = $head->get('Subject');
     chomp $subj;
     Encode::from_to( $subj, $head->mime_attr('content-type.charset'), 'cp866' );
@@ -210,8 +240,6 @@ sub rfc2ftn {
 
 #    $headerref->{Attributes} = FTN::JAM::Attr::LOCAL | FTN::JAM::Attr::TYPEECHO;
 
-    my $group = lc $head->get('Newsgroups');
-    chomp $group;
 
 
 #NETMAIL
@@ -247,7 +275,7 @@ sub rfc2ftn {
     chomp $org;
     Encode::from_to( $org, $head->mime_attr('content-type.charset'), 'cp866' );
 
-    my $bodyh = $entity->bodyhandle;
+
     my $msg   = $bodyh->as_string;
     Encode::from_to( $msg, $head->mime_attr('content-type.charset'), 'cp866' );
     $msg =~ s/\r\n/\n/g;
@@ -255,7 +283,7 @@ sub rfc2ftn {
     $msg .= "\r--- jam2nntp.pl\r";
     $msg .= " * Origin: " . ( $org ? $org : 'No origin' ) . " ($Address)\r";
     
-    return ( $group, \@subfields, \@nmsubfields, $headerref, \$msg );
+    return ( \@subfields, \@nmsubfields, $headerref, \$msg );
 }
 
 
@@ -340,6 +368,33 @@ sub nntpd_cmd_head {
     return;
 }
 
+sub searchid {
+		my $article = shift;
+		my $handle = shift;
+        my $num;
+        my $size;
+        $article =~ s/.*\+(.*)@.*/$1/;
+        $article =~ s/=/@/;
+        $article =~ s/\?/</;
+        $article =~ s/\?/>/;
+        $article =~ s/(.*)\./$1 /;
+        my $search;
+
+        FTN::JAM::GetMBSize( $handle, \$size ) or die;
+        for ( $num = 1 ; $num <= $size ; $num++ ) {
+            my ( %header, @subfields, $text );
+            FTN::JAM::ReadMessage( $handle, $num, \%header, \@subfields,
+                \$text )
+              or next;
+            my %fields = @subfields;
+            if ( $fields{4} eq $article ) {
+                $search = $num;
+                last;
+            }
+        }
+        return $search;
+}
+
 sub common_article {
     my $params  = shift;
     my $command = shift;
@@ -365,27 +420,8 @@ sub common_article {
     $article = 1 unless $article;
 
     if ( $article =~ /^<.*>$/ ) {
-        my $num;
-        my $size;
-        $article =~ s/.*\+(.*)@.*/$1/;
-        $article =~ s/=/@/;
-        $article =~ s/\?/</;
-        $article =~ s/\?/>/;
-        $article =~ s/(.*)\./$1 /;
-        my $search;
 
-        FTN::JAM::GetMBSize( $handle, \$size ) or die;
-        for ( $num = 1 ; $num <= $size ; $num++ ) {
-            my ( %header, @subfields, $text );
-            FTN::JAM::ReadMessage( $handle, $num, \%header, \@subfields,
-                \$text )
-              or next;
-            my %fields = @subfields;
-            if ( $fields{4} eq $article ) {
-                $search = $num;
-                last;
-            }
-        }
+		my $search = searchid( $article, $handle );
         if ($search) {
             $article = $search;
         }
@@ -469,7 +505,9 @@ sub message_header {
     my $faddr;
     my $addr;
     if ( $addr = new FTN::Address( $fields{4} ) ) {
-        $faddr = '<' . $addr->fqdn('org') . '>';
+		$faddr = '<' . $fields{2};
+		$faddr =~ s/\s+/./g;
+        $faddr .= '@' . $addr->fqdn('org') . '>';
     }
     else {
         $faddr = $fields{4};
