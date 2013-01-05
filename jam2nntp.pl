@@ -1,5 +1,12 @@
 #!/usr/bin/perl
 
+#COPYRIGHT AND LICENCE
+
+#Copyright (C) 2010-2013 Alexander Bolychev
+
+#This program is free software; you can redistribute it and/or modify it
+#under the same terms as Perl itself.
+
 use lib '.';
 
 use strict;
