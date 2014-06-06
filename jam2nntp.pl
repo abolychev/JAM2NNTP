@@ -2,7 +2,7 @@
 
 #COPYRIGHT AND LICENCE
 
-#Copyright (C) 2010-2013 Alexander Bolychev
+#Copyright (C) 2010-2014 Alexander Bolychev
 
 #This program is free software; you can redistribute it and/or modify it
 #under the same terms as Perl itself.
@@ -35,7 +35,7 @@ unless( $ARGV[0] ) {
 
 if ( open F, $ARGV[0] ) {
     while (<F>) {
-        if (/^(Netmail|Echo|Bad|Local|Dupe)Area\s+(\S+)\s+(\S+)\s.*?-b\s+Jam/)
+        if (/^(Netmail|Echo|Bad|Local|Dupe)Area\s+(\S+)\s+(\S+)\s.*?-b\s+[Jj]am/)
         {
             $groups{ lc( 'fido7.' . $2 ) } = $3;
             $grtype{ lc( 'fido7.' . $2 ) } = lc $1;
@@ -46,6 +46,8 @@ if ( open F, $ARGV[0] ) {
     }
     close F;
 }
+
+print Dumper(%groups);
 
 my $nntpd = POE::Component::Server::NNTP->spawn(
     alias   => 'nntpd',
